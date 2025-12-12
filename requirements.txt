@@ -1,0 +1,33 @@
+# Big Data Project Dependencies
+
+# Data Processing
+pandas>=2.0.0
+numpy>=1.24.0
+pyarrow>=14.0.0
+
+# Kafka
+kafka-python>=2.0.2
+confluent-kafka>=2.3.0
+
+# Web Crawling
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+selenium>=4.15.0
+scrapy>=2.11.0
+
+# Database
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+
+# AWS
+boto3>=1.34.0
+botocore>=1.34.0
+
+# Utilities
+python-dotenv>=1.0.0
+pyyaml>=6.0.0
+loguru>=0.7.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
