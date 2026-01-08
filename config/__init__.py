@@ -1,0 +1,15 @@
+from .settings import (
+    SELENIUM_CONFIG,
+    SCRAPING_CONFIG,
+    CSS_SELECTORS,
+    STATS_CATEGORIES,
+    S3_CONFIG,
+)
+
+__all__ = [
+    "SELENIUM_CONFIG", 
+    "SCRAPING_CONFIG",
+    "CSS_SELECTORS",
+    "STATS_CATEGORIES",
+    "S3_CONFIG",
+]

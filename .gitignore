@@ -1,0 +1,38 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs (keep directory structure)
+logs/*.log
+
+# Data outputs (keep directory structure)
+data/scraped/*.json
+data/scraped/*.csv
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Selenium
+chromedriver
+chromedriver.exe
+geckodriver
+
+# Docker
+docker-compose.override.yml
+
+
+data/scraped/
