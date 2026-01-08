@@ -100,6 +100,26 @@ class S3ScraperApp:
         # Upload aggregate
         if all_matches:
             self.s3_store.upload_aggregate(all_matches, season, matchweek)
+            
+            # Also upload a simple CSV summary for Bronze
+            summary_rows = []
+            for m in all_matches:
+                info = m.get("match_info", {})
+                summary_rows.append({
+                    "match_id": m.get("match_id"),
+                    "season": m.get("season"),
+                    "matchweek": m.get("matchweek"),
+                    "date": info.get("date_time") or info.get("date"),
+                    "home_team": info.get("home_team"),
+                    "away_team": info.get("away_team"),
+                    "home_score": info.get("home_score"),
+                    "away_score": info.get("away_score"),
+                    "url": m.get("url")
+                })
+            
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            csv_key = f"{self.s3_prefix}/bronze/{season.replace('/', '-')}/aggregates/mw{matchweek:02d}_summary_{timestamp}.csv"
+            self.s3_store.upload_csv(summary_rows, layer="bronze", s3_key=csv_key)
         
         logger.info(f"MW{matchweek} complete: {len(results)}/{total} matches")
         return results

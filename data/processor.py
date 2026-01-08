@@ -27,23 +27,37 @@ class S3DataStore:
         )
         logger.info(f"Connected to S3 bucket: {self.bucket_name}")
     
-    def _generate_s3_key(self, season: str = None, matchweek: int = None, match_id: int = None, ext: str = "json") -> str:
-        """Generate S3 key path."""
+    def _generate_s3_key(self, layer: str = "bronze", season: str = None, matchweek: int = None, match_id: int = None, ext: str = "json") -> str:
+        """Generate S3 key path with layer support."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        if season and matchweek and match_id:
-            return f"{self.prefix}/{season.replace('/', '-')}/matchweek_{matchweek:02d}/match_{match_id}.{ext}"
-        elif season and matchweek:
-            return f"{self.prefix}/{season.replace('/', '-')}/aggregates/mw{matchweek:02d}_{timestamp}.{ext}"
-        else:
-            return f"{self.prefix}/data/{timestamp}.{ext}"
+        # Ensure layer is valid
+        if layer not in ["bronze", "silver", "gold"]:
+            layer = "bronze"
+            
+        base_path = f"{self.prefix}/{layer}"
+        
+        if season:
+            season_fmt = season.replace('/', '-')
+            if matchweek:
+                if match_id:
+                    return f"{base_path}/{season_fmt}/matchweek_{matchweek:02d}/match_{match_id}.{ext}"
+                return f"{base_path}/{season_fmt}/aggregates/mw{matchweek:02d}_{timestamp}.{ext}"
+            return f"{base_path}/{season_fmt}/data/{timestamp}.{ext}"
+        
+        return f"{base_path}/misc/{timestamp}.{ext}"
     
-    def upload_json(self, data: Dict[str, Any], s3_key: str = None) -> Optional[str]:
+    def upload_json(self, data: Dict[str, Any], layer: str = "bronze", s3_key: str = None) -> Optional[str]:
         """Upload data as JSON to S3."""
         from botocore.exceptions import ClientError
         
         if not s3_key:
-            s3_key = self._generate_s3_key(data.get("season"), data.get("matchweek"), data.get("match_id"))
+            s3_key = self._generate_s3_key(
+                layer=layer,
+                season=data.get("season"), 
+                matchweek=data.get("matchweek"), 
+                match_id=data.get("match_id")
+            )
         
         try:
             self.s3_client.put_object(
@@ -53,35 +67,59 @@ class S3DataStore:
                 ContentType='application/json'
             )
             s3_uri = f"s3://{self.bucket_name}/{s3_key}"
-            logger.info(f"Uploaded: {s3_uri}")
+            logger.info(f"Uploaded to {layer}: {s3_uri}")
             return s3_uri
         except ClientError as e:
             logger.error(f"Upload failed: {e}")
             return None
     
-    def upload_csv(self, data: Dict[str, Any], s3_key: str = None) -> Optional[str]:
+    def upload_csv(self, data: Dict[str, Any], layer: str = "bronze", s3_key: str = None) -> Optional[str]:
         """Upload match stats as CSV to S3."""
         from botocore.exceptions import ClientError
         
         if not s3_key:
-            s3_key = self._generate_s3_key(data.get("season"), data.get("matchweek"), data.get("match_id"), "csv")
+            s3_key = self._generate_s3_key(
+                layer=layer,
+                season=data.get("season"), 
+                matchweek=data.get("matchweek"), 
+                match_id=data.get("match_id"), 
+                ext="csv"
+            )
         
         try:
-            rows = []
-            match_info = data.get("match_info", {})
-            for stat_name, stat_values in data.get("statistics", {}).items():
-                if isinstance(stat_values, dict):
-                    rows.append({
-                        "match_id": data.get("match_id"),
-                        "home_team": match_info.get("home_team"),
-                        "away_team": match_info.get("away_team"),
-                        "stat_name": stat_name,
-                        "home_value": stat_values.get("home"),
-                        "away_value": stat_values.get("away"),
-                    })
+            # Check if input is already a list of dicts (flat structure)
+            if isinstance(data, list):
+                df = pd.DataFrame(data)
+            else:
+                # Convert nested match object to flat rows
+                rows = []
+                match_info = data.get("match_info", {})
+                match_id = data.get("match_id")
+                
+                # If we're uploading to gold, we might get a different structure, 
+                # but for bronze/silver match dumping, this logic holds.
+                # If 'statistics' is missing, maybe it's already flattened?
+                
+                statistics = data.get("statistics")
+                if statistics and isinstance(statistics, dict):
+                    for stat_name, stat_values in statistics.items():
+                        if isinstance(stat_values, dict):
+                            rows.append({
+                                "match_id": match_id,
+                                "home_team": match_info.get("home_team"),
+                                "away_team": match_info.get("away_team"),
+                                "stat_name": stat_name,
+                                "home_value": stat_values.get("home"),
+                                "away_value": stat_values.get("away"),
+                            })
+                elif not statistics and isinstance(data, dict):
+                    # Fallback for simple dict upload
+                    rows = [data]
+
+                df = pd.DataFrame(rows)
             
             csv_buffer = io.StringIO()
-            pd.DataFrame(rows).to_csv(csv_buffer, index=False)
+            df.to_csv(csv_buffer, index=False)
             
             self.s3_client.put_object(
                 Bucket=self.bucket_name,
@@ -94,21 +132,21 @@ class S3DataStore:
             logger.error(f"CSV upload failed: {e}")
             return None
     
-    def upload_match(self, data: Dict[str, Any], formats: List[str] = None) -> Dict[str, Optional[str]]:
+    def upload_match(self, data: Dict[str, Any], formats: List[str] = None, layer: str = "bronze") -> Dict[str, Optional[str]]:
         """Upload match in multiple formats."""
         formats = formats or ["json"]
         results = {}
         if "json" in formats:
-            results["json"] = self.upload_json(data)
+            results["json"] = self.upload_json(data, layer=layer)
         if "csv" in formats:
-            results["csv"] = self.upload_csv(data)
+            results["csv"] = self.upload_csv(data, layer=layer)
         return results
     
-    def upload_aggregate(self, matches: List[Dict[str, Any]], season: str = None, matchweek: int = None) -> Optional[str]:
+    def upload_aggregate(self, matches: List[Dict[str, Any]], season: str = None, matchweek: int = None, layer: str = "bronze") -> Optional[str]:
         """Upload aggregated match data."""
         from botocore.exceptions import ClientError
         
-        s3_key = self._generate_s3_key(season, matchweek)
+        s3_key = self._generate_s3_key(layer=layer, season=season, matchweek=matchweek)
         try:
             self.s3_client.put_object(
                 Bucket=self.bucket_name,
@@ -117,8 +155,54 @@ class S3DataStore:
                 ContentType='application/json'
             )
             s3_uri = f"s3://{self.bucket_name}/{s3_key}"
-            logger.info(f"Aggregate uploaded: {s3_uri}")
+            logger.info(f"Aggregate uploaded to {layer}: {s3_uri}")
             return s3_uri
         except ClientError as e:
             logger.error(f"Aggregate upload failed: {e}")
             return None
+
+    def list_files(self, layer: str, season: str, matchweek: int = None, ext: str = "json") -> List[str]:
+        """List files in a specific layer path matching an extension."""
+        prefix_path = f"{self.prefix}/{layer}/{season.replace('/', '-')}/"
+        if matchweek:
+            prefix_path += f"matchweek_{matchweek:02d}/"
+            
+        try:
+            response = self.s3_client.list_objects_v2(Bucket=self.bucket_name, Prefix=prefix_path)
+            if 'Contents' in response:
+                return [obj['Key'] for obj in response['Contents'] if obj['Key'].endswith(f".{ext}")]
+            return []
+        except Exception as e:
+            logger.error(f"List files failed: {e}")
+            return []
+
+    def read_json(self, key: str) -> Optional[Dict]:
+        """Read a JSON file from S3."""
+        try:
+            response = self.s3_client.get_object(Bucket=self.bucket_name, Key=key)
+            content = response['Body'].read().decode('utf-8')
+            return json.loads(content)
+        except Exception as e:
+            logger.error(f"Read failed for {key}: {e}")
+            return None
+
+    def read_csv(self, key: str) -> Optional[pd.DataFrame]:
+        """Read a CSV file from S3 into a DataFrame."""
+        try:
+            response = self.s3_client.get_object(Bucket=self.bucket_name, Key=key)
+            return pd.read_csv(response['Body'])
+        except Exception as e:
+            logger.error(f"Read CSV failed for {key}: {e}")
+            return None
+
+    def list_aggregates(self, layer: str, season: str, ext: str = "csv") -> List[str]:
+        """List aggregate files for a season."""
+        prefix_path = f"{self.prefix}/{layer}/{season.replace('/', '-')}/aggregates/"
+        try:
+            response = self.s3_client.list_objects_v2(Bucket=self.bucket_name, Prefix=prefix_path)
+            if 'Contents' in response:
+                return [obj['Key'] for obj in response['Contents'] if obj['Key'].endswith(f".{ext}")]
+            return []
+        except Exception as e:
+            logger.error(f"List aggregates failed: {e}")
+            return []

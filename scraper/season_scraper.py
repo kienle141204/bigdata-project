@@ -414,7 +414,17 @@ class SeasonScraper:
     def _extract_all_match_data(self) -> Optional[Dict[str, Any]]:
         """Extract all match data including stats - comprehensive version."""
         try:
-            # First click on Stats tab
+            # Wait for page to fully load (headless needs more time)
+            time.sleep(5)
+            self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(2)
+            self.driver.execute_script("window.scrollTo(0, 0);")
+            time.sleep(2)
+            
+            # STEP 0: Extract events (goals, cards) from main page BEFORE clicking any tabs
+            events = self._extract_events()
+            
+            # STEP 1: Click on Stats tab
             self._click_stats_tab()
             
             # Scroll to load all sections
@@ -588,6 +598,31 @@ class SeasonScraper:
             """
             
             data = self.driver.execute_script(script)
+            
+            # Add events (already extracted from main page before clicking Stats tab)
+            if events:
+                data["events"] = events
+            
+            # STEP 3: Click Match Info tab and extract details
+            self._click_tab("Match Info")
+            time.sleep(2)  # Wait for tab content
+            match_info_extra = self._extract_match_info_tab()
+            if match_info_extra:
+                # Merge with existing match_info
+                if "match_info" in data:
+                    data["match_info"].update(match_info_extra)
+                else:
+                    data["match_info_details"] = match_info_extra
+            
+            # STEP 4: Click Lineups tab and extract lineups
+            self._click_tab("Lineups")
+            time.sleep(2) # Wait for tab content
+            self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(2) # Wait for lazy load
+            lineups = self._extract_lineups_tab()
+            if lineups:
+                data["lineups"] = lineups
+            
             return data
             
         except Exception as e:
@@ -617,6 +652,250 @@ class SeasonScraper:
         except Exception as e:
             logger.warning(f"Could not click Stats tab: {e}")
             return False
+    
+    def _click_tab(self, tab_name: str) -> bool:
+        """Click on a specific tab (Stats, Match Info, Lineups, etc.)."""
+        try:
+            script = f"""
+                (() => {{
+                    const tabs = document.querySelectorAll('button, a, [role="tab"]');
+                    for (const tab of tabs) {{
+                        if (tab.textContent.trim() === '{tab_name}') {{
+                            tab.click();
+                            return true;
+                        }}
+                    }}
+                    return false;
+                }})()
+            """
+            result = self.driver.execute_script(script)
+            time.sleep(2)
+            return result
+        except:
+            return False
+    
+    def _extract_match_info_tab(self) -> Dict[str, Any]:
+        """Extract match info from Match Info tab (kickoff, stadium, attendance, referee)."""
+        result = {
+            "kickoff": None,
+            "stadium": None,
+            "attendance": None,
+            "referee": None
+        }
+        
+        try:
+            # Find match-details entries
+            entries = self.driver.find_elements(By.CSS_SELECTOR, ".match-details__entry")
+            for entry in entries:
+                text = entry.text.lower()
+                value = ""
+                try:
+                    value = entry.find_element(By.TAG_NAME, "span").text.strip()
+                except:
+                    # Fallback if span not found
+                    parts = entry.text.split('\n')
+                    if len(parts) > 1:
+                        value = parts[-1].strip()
+
+                if "kick-off" in text or "kickoff" in text:
+                    result["kickoff"] = value
+                if "stadium" in text:
+                    result["stadium"] = value
+                if "attendance" in text:
+                    result["attendance"] = value
+            
+            # Find referee from page text using regex as backup if not in entries
+            if not result["referee"]:
+                try:
+                    page_text = self.driver.find_element(By.TAG_NAME, "body").text
+                    ref_match = re.search(r"Referee\s+([A-Za-z\s]+?)\s+(?:Assistant|Fourth|VAR|$)", page_text, re.IGNORECASE)
+                    if ref_match:
+                        result["referee"] = ref_match.group(1).strip()
+                except: pass
+                
+            logger.info(f"Extracted match info: stadium={result.get('stadium')}, referee={result.get('referee')}")
+            return result
+        except Exception as e:
+            logger.error(f"Error extracting match info: {e}")
+            return result
+    
+    def _extract_lineups_tab(self) -> Dict[str, Any]:
+        """Extract lineups from Lineups tab (formations, managers, starting XI, subs)."""
+        result = {
+            "home": {"formation": None, "manager": None, "starting_xi": [], "substitutes": []},
+            "away": {"formation": None, "manager": None, "starting_xi": [], "substitutes": []}
+        }
+        
+        try:
+            # Get formations from text
+            try:
+                page_text = self.driver.find_element(By.TAG_NAME, "body").text
+                formations = re.findall(r"Formation\s+(\d+-\d+-\d+)", page_text, re.IGNORECASE)
+                if len(formations) >= 2:
+                    result["home"]["formation"] = formations[0]
+                    result["away"]["formation"] = formations[1]
+                
+                managers = re.findall(r"Manager\s+([A-Za-z\s]+?)(?=\d|Formation|$)", page_text, re.IGNORECASE)
+                if len(managers) >= 2:
+                    result["home"]["manager"] = managers[0].strip()
+                    result["away"]["manager"] = managers[1].strip()
+            except: pass
+            
+            # Helper to extract players from container
+            def get_players(container_selector):
+                players = []
+                try:
+                    container = self.driver.find_elements(By.CSS_SELECTOR, container_selector)
+                    if not container: return []
+                    
+                    player_elements = container[0].find_elements(By.CSS_SELECTOR, ".lineups-player")
+                    for p in player_elements:
+                        try:
+                            # Try multiple selectors for name
+                            name = ""
+                            try:
+                                name = p.find_element(By.CSS_SELECTOR, "p.lineups-player__info").text
+                            except:
+                                try:
+                                    name = p.find_element(By.TAG_NAME, "p").text
+                                except:
+                                    try:
+                                        name = p.find_element(By.CSS_SELECTOR, ".lineups-player__name").text
+                                    except: pass
+                            
+                            # Number
+                            number = None
+                            try:
+                                number = p.find_element(By.CSS_SELECTOR, ".lineups-player__shirt-number").text
+                            except:
+                                try:
+                                    number = p.find_element(By.CSS_SELECTOR, ".lineups-player__number").text
+                                except: pass
+                                
+                            if name:
+                                players.append({"name": name.strip(), "number": number})
+                        except: continue
+                except Exception as e:
+                    logger.warning(f"Error getting players from {container_selector}: {e}")
+                return players
+
+            # Get Starting XI
+            result["home"]["starting_xi"] = get_players(".lineups-team-formation--home")
+            result["away"]["starting_xi"] = get_players(".lineups-team-formation--away")
+            
+            # Fallback if specific containers not found (sometimes structure differs)
+            if not result["home"]["starting_xi"] and not result["away"]["starting_xi"]:
+                all_players_els = self.driver.find_elements(By.CSS_SELECTOR, ".lineups-player")
+                all_players = []
+                for p in all_players_els:
+                    try:
+                        name = p.text.split('\n')[0] # Simple split fall back
+                        all_players.append({"name": name, "number": None}) 
+                    except: pass
+                
+                # Assume first 11 home, next 11 away
+                if len(all_players) >= 22:
+                    result["home"]["starting_xi"] = all_players[:11]
+                    result["away"]["starting_xi"] = all_players[11:22]
+
+            # Substitutes
+            try:
+                sub_lists = self.driver.find_elements(By.CSS_SELECTOR, ".squad-list")
+                teams = ["home", "away"]
+                for i, s_list in enumerate(sub_lists):
+                    if i >= 2: break
+                    team = teams[i]
+                    items = s_list.find_elements(By.CSS_SELECTOR, ".squad-list__item")
+                    for item in items:
+                        result[team]["substitutes"].append({"name": item.text.strip()})
+            except Exception as e:
+                logger.warning(f"Error extracting subs: {e}")
+
+            home_count = len(result["home"]["starting_xi"])
+            away_count = len(result["away"]["starting_xi"])
+            logger.info(f"Extracted lineups: Home {home_count}, Away {away_count} players")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error extracting lineups: {e}")
+            return result
+    
+    def _extract_events(self) -> Dict[str, Any]:
+        """Extract goals and cards from the scoreboard on main page."""
+        result = {
+            "half_time_score": None,
+            "home_goals": [],
+            "away_goals": [],
+            "home_yellow_cards": [],
+            "away_yellow_cards": [],
+            "home_red_cards": [],
+            "away_red_cards": []
+        }
+        
+        try:
+            # Half-time score
+            try:
+                ht_elem = self.driver.find_element(By.CLASS_NAME, "match-status__half-time-score")
+                text = ht_elem.text.strip()
+                import re
+                m = re.search(r"HT\s*(\d+)\s*[-–]\s*(\d+)", text, re.IGNORECASE)
+                if m:
+                    result["half_time_score"] = f"{m.group(1)}-{m.group(2)}"
+            except Exception:
+                pass # Optional element
+
+            # Helper to extract events from list
+            def extract_list_items(selector, target_list):
+                try:
+                    ul_elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    if not ul_elements: return
+                    
+                    # Usually only one ul per type per team
+                    # Use the first found ul element
+                    lis = ul_elements[0].find_elements(By.TAG_NAME, "li")
+                    for li in lis:
+                        text = li.text.strip()
+                        if not text: continue
+                        
+                        # Try to parse scorer/assist if it's a goal
+                        if "Goals" in selector:
+                            scorer = text
+                            assist = None
+                            # Try to find specific parts if possible, otherwise use full text
+                            try:
+                                scorer_el = li.find_element(By.CSS_SELECTOR, ".scoreboard-event__scorer")
+                                scorer = scorer_el.text.strip()
+                                assist_el = li.find_element(By.CSS_SELECTOR, ".scoreboard-event__assist")
+                                assist = assist_el.text.strip()
+                            except NoSuchElementException:
+                                pass # Elements not found, use full text as scorer
+                            
+                            target_list.append({
+                                "scorer": scorer,
+                                "assist": assist
+                            })
+                        else:
+                            # Cards just append text
+                            target_list.append(text)
+                except Exception as e:
+                    logger.warning(f"Error extracting {selector}: {e}")
+
+            # Extract Goals
+            extract_list_items('ul[data-testid="homeTeamGoals"]', result["home_goals"])
+            extract_list_items('ul[data-testid="awayTeamGoals"]', result["away_goals"])
+            
+            # Extract Cards
+            extract_list_items('ul[data-testid="homeTeamYellowCards"]', result["home_yellow_cards"])
+            extract_list_items('ul[data-testid="awayTeamYellowCards"]', result["away_yellow_cards"])
+            extract_list_items('ul[data-testid="homeTeamRedCards"]', result["home_red_cards"])
+            extract_list_items('ul[data-testid="awayTeamRedCards"]', result["away_red_cards"])
+            
+            logger.info(f"Extracted events: {len(result['home_goals']) + len(result['away_goals'])} goals")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error extracting events: {e}")
+            return result
     
     def scrape_season(
         self,
