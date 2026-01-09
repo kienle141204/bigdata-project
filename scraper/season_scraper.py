@@ -38,6 +38,19 @@ class SeasonScraper:
         "2025/26": {"season_id": 2025, "start_match_id": 2561895},
         "2024/25": {"season_id": 2024, "start_match_id": 2444470},
         "2023/24": {"season_id": 2023, "start_match_id": 2367538},
+        "2022/23": {"season_id": 2022, "start_match_id": 2292810},
+        "2021/22": {"season_id": 2021, "start_match_id": 2210271},
+        "2020/21": {"season_id": 2020, "start_match_id": 2128288},
+        "2019/20": {"season_id": 2019, "start_match_id": 1059702},
+        "2018/19": {"season_id": 2018, "start_match_id": 987597},
+        "2017/18": {"season_id": 2017, "start_match_id": 918893},
+        "2016/17": {"season_id": 2016, "start_match_id": 855178},
+        "2015/16": {"season_id": 2015, "start_match_id": 803169},
+        "2014/15": {"season_id": 2014, "start_match_id": 755307},
+        "2013/14": {"season_id": 2013, "start_match_id": 694904},
+        "2012/13": {"season_id": 2012, "start_match_id": 441999},
+        "2011/12": {"season_id": 2011, "start_match_id": 360469},
+        "2010/11": {"season_id": 2010, "start_match_id": 321665},
     }
     
     TOTAL_MATCHWEEKS = 38

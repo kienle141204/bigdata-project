@@ -1,0 +1,29 @@
+# Ignore virtual environments
+venv/
+.venv/
+env/
+.env
+
+# Ignore git
+.git/
+.gitignore
+
+# Ignore VSCode settings
+.vscode/
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore local data output (we want clean image)
+data/scraped/
+logs/
+
+# Ignore Docker-related files (not needed inside image)
+Dockerfile
+docker-compose.yml
+DOCKER_GUIDE.md
+AWS_DEPLOY_GUIDE.md
+.dockerignore

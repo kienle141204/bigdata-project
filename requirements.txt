@@ -4,6 +4,7 @@ webdriver-manager==4.0.1
 
 # Data processing
 pandas==2.1.4
+pyspark==3.5.0
 
 # Utilities
 python-dotenv==1.0.0

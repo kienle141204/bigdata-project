@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  # 1. SERVICE CÀO DỮ LIỆU (SCRAPER)
+  scraper:
+    build: .
+    image: bigdata-project-full
+    # Lệnh mặc định: Cào vòng 1 với 5 luồng. 
+    # Bạn có thể ghi đè lệnh này khi chạy: docker-compose run scraper python scrape_to_s3.py ...
+    command: python scrape_to_s3.py --matchweek 1 --workers 5
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONUNBUFFERED=1 # Để log hiện ngay lập tức
+    # Tăng RAM cho Chrome
+    shm_size: '2gb'
+
+  # 2. SERVICE XỬ LÝ DỮ LIỆU (SPARK ETL)
+  spark-job:
+    build: . # Dùng chung Dockerfile với scraper cho tiện (đỡ phải build 2 lần)
+    image: bigdata-project-full
+    # Lệnh mặc định: Chạy pipeline xử lý vòng 1
+    command: python pipeline.py --matchweeks 1 --skip-scrape
+    volumes:
+      - .:/app
+    environment:
+      - JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+      - SPARK_LOCAL_IP=127.0.0.1
+      - SPARK_DRIVER_MEMORY=4g # Tăng RAM cho Spark
+      - PYTHONUNBUFFERED=1
