@@ -36,3 +36,7 @@ docker-compose.override.yml
 
 
 data/scraped/
+
+output/
+
+*.json
