@@ -36,3 +36,14 @@ S3_CONFIG = {
     "region_name": os.getenv("AWS_REGION", "ap-southeast-1"),
     "prefix": os.getenv("AWS_S3_PREFIX", "premier_league"),
 }
+
+# MySQL Database
+MYSQL_CONFIG = {
+    "host": os.getenv("MYSQL_HOST", "mysql-6d9700d-quydang16012004-e907.f.aivencloud.com"),
+    "port": int(os.getenv("MYSQL_PORT", "28225")),
+    "user": os.getenv("MYSQL_USER", "avnadmin"),
+    "password": os.getenv("MYSQL_PASSWORD", ""),
+    "database": os.getenv("MYSQL_DATABASE", "defaultdb"),
+    "ssl_mode": os.getenv("MYSQL_SSL_MODE", "REQUIRED"),
+    "ssl_ca": os.getenv("MYSQL_SSL_CA", ""),
+}

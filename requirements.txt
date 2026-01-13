@@ -4,7 +4,6 @@ webdriver-manager==4.0.1
 
 # Data processing
 pandas==2.1.4
-pyspark==3.5.0
 
 # Utilities
 python-dotenv==1.0.0
@@ -14,3 +13,11 @@ loguru==0.7.2
 
 # AWS S3 storage
 boto3==1.34.14
+
+# Apache Spark for big data processing
+pyspark==3.5.3
+
+# MySQL database connectors
+mysql-connector-python==8.2.0
+pymysql==1.1.0
+sqlalchemy==2.0.23
