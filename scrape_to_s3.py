@@ -16,6 +16,15 @@ from scraper.season_scraper import SeasonScraper
 from data.processor import S3DataStore
 from data.db import MatchDB
 
+# Kafka imports (optional)
+try:
+    from kafka.producer import MatchDataProducer
+    HAS_KAFKA = True
+except ImportError:
+    logger.warning("Kafka not available. Install kafka-python to use Kafka mode.")
+    HAS_KAFKA = False
+    MatchDataProducer = None
+
 
 def _setup_logging():
     """Configure logging."""
@@ -30,10 +39,17 @@ _setup_logging()
 
 class SingleThreadScraper:
     """Helper class to run a scraper in a single thread/process context."""
-    def __init__(self, headless=True):
+    def __init__(self, headless=True, use_kafka=False):
         self.scraper = SeasonScraper(headless=headless)
         self.db = MatchDB()
-        self.s3_store = S3DataStore()
+        self.use_kafka = use_kafka and HAS_KAFKA
+        
+        if self.use_kafka:
+            self.kafka_producer = MatchDataProducer()
+            logger.info("🚀 Kafka mode enabled - data will be sent to Kafka")
+        else:
+            self.s3_store = S3DataStore()
+            logger.info("💾 Direct S3 mode - data will be uploaded directly to S3")
         
     def __enter__(self):
         self.scraper.start()
@@ -62,7 +78,12 @@ class SingleThreadScraper:
                 match_data = self.scraper.scrape_match_with_matchweek(match_id, matchweek, season)
                 if match_data:
                     all_matches.append(match_data)
-                    upload_results = self.s3_store.upload_match(match_data, formats)
+                    
+                    # Upload using Kafka or direct S3
+                    if self.use_kafka:
+                        upload_results = self.kafka_producer.send_match_data(match_data)
+                    else:
+                        upload_results = self.s3_store.upload_match(match_data, formats)
                     
                     # UPDATE DB logic
                     info = match_data.get("match_info", {})
@@ -90,19 +111,26 @@ class SingleThreadScraper:
             if i < len(match_ids) - 1:
                 time.sleep(delay)
 
-        # Upload Aggregate for this MW
+        # Upload Aggregate for this MW or trigger Silver processing
         if all_matches:
-            self.s3_store.upload_aggregate(all_matches, season, matchweek)
-            logger.info(f"MW{matchweek}: Uploaded aggregate data.")
+            if self.use_kafka:
+                # Send batch to Kafka and trigger Silver processing
+                self.kafka_producer.send_batch(all_matches)
+                self.kafka_producer.trigger_silver_processing(season, matchweek)
+                logger.info(f"MW{matchweek}: Sent to Kafka and triggered Silver processing.")
+            else:
+                # Direct S3 upload
+                self.s3_store.upload_aggregate(all_matches, season, matchweek)
+                logger.info(f"MW{matchweek}: Uploaded aggregate data.")
             
         logger.info(f"MW{matchweek}: Completed. {len(results)} matches scraped.")
         return results
 
 
-def run_matchweek_task(matchweek: int, season: str, delay: float, formats: List[str], headless: bool):
+def run_matchweek_task(matchweek: int, season: str, delay: float, formats: List[str], headless: bool, use_kafka: bool = False):
     """Worker function to be run in a separate thread."""
     try:
-        with SingleThreadScraper(headless=headless) as worker:
+        with SingleThreadScraper(headless=headless, use_kafka=use_kafka) as worker:
             return worker.process_matchweek(matchweek, season, delay, formats)
     except Exception as e:
         logger.critical(f"Critical error in thread for MW{matchweek}: {e}")
@@ -114,8 +142,8 @@ class S3ScraperApp:
     Wrapper class for backward compatibility with pipeline.py.
     Provides single-threaded scraping functionality.
     """
-    def __init__(self, headless: bool = True, bucket_name: str = None, s3_prefix: str = None):
-        self.worker = SingleThreadScraper(headless=headless)
+    def __init__(self, headless: bool = True, bucket_name: str = None, s3_prefix: str = None, use_kafka: bool = False):
+        self.worker = SingleThreadScraper(headless=headless, use_kafka=use_kafka)
         self.bucket_name = bucket_name # Kept for API compatibility
         self.s3_prefix = s3_prefix     # Kept for API compatibility
     
@@ -144,6 +172,7 @@ def main():
     parser.add_argument("--delay", type=float, default=2.0, help="Delay between matches")
     parser.add_argument("--no-headless", action="store_true", help="Show browser")
     parser.add_argument("--workers", type=int, default=1, help="Number of parallel threads (default 1)")
+    parser.add_argument("--use-kafka", action="store_true", help="Send data to Kafka instead of direct S3")
     
     args = parser.parse_args()
     formats = [f.strip() for f in args.formats.split(",")]
@@ -152,7 +181,7 @@ def main():
     if args.match:
         mw = args.matchweek[0] if args.matchweek else None
         # Reuse the SingleThreadScraper class for consistency
-        with SingleThreadScraper(headless=not args.no_headless) as worker:
+        with SingleThreadScraper(headless=not args.no_headless, use_kafka=args.use_kafka) as worker:
             # We need to manually access the internal logic or just expose a method
             # For simplicity, let's just do the manual scrape here reusing the component
             scraper = worker.scraper
@@ -178,7 +207,7 @@ def main():
             future_to_mw = {
                 executor.submit(
                     run_matchweek_task, 
-                    mw, args.season, args.delay, formats, not args.no_headless
+                    mw, args.season, args.delay, formats, not args.no_headless, args.use_kafka
                 ): mw for mw in matchweeks
             }
             

@@ -1,28 +1,140 @@
 services:
-  # 1. SERVICE CÀO DỮ LIỆU (SCRAPER)
+  # 1. ZOOKEEPER (Required for Kafka)
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - bigdata-network
+
+  # 2. KAFKA BROKER
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9093,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168
+    networks:
+      - bigdata-network
+    healthcheck:
+      test: [ "CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092" ]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  # 3. KAFKA UI (Optional - for monitoring)
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    depends_on:
+      - kafka
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: premier-league-cluster
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9093
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    networks:
+      - bigdata-network
+
+  # 4. SCRAPER WITH KAFKA PRODUCER
   scraper:
     build: .
     image: bigdata-project-full
-    # Lệnh mặc định: Cào vòng 1 với 5 luồng. 
-    # Bạn có thể ghi đè lệnh này khi chạy: docker-compose run scraper python scrape_to_s3.py ...
-    command: python scrape_to_s3.py --matchweek 1 --workers 5
+    command: python scrape_to_s3.py --matchweek 1 --workers 5 --use-kafka
+    depends_on:
+      kafka:
+        condition: service_healthy
     volumes:
       - .:/app
     environment:
-      - PYTHONUNBUFFERED=1 # Để log hiện ngay lập tức
-    # Tăng RAM cho Chrome
+      - PYTHONUNBUFFERED=1
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9093
+      - USE_KAFKA=true
     shm_size: '2gb'
+    networks:
+      - bigdata-network
 
-  # 2. SERVICE XỬ LÝ DỮ LIỆU (SPARK ETL)
-  spark-job:
-    build: . # Dùng chung Dockerfile với scraper cho tiện (đỡ phải build 2 lần)
+  # 5. SPARK STREAMING (Real-time: Kafka → Silver directly, NO Bronze)
+  streaming-etl:
+    build: .
     image: bigdata-project-full
-    # Lệnh mặc định: Chạy pipeline xử lý vòng 1
+    command: python streaming_etl.py --kafka-servers kafka:9093 --format parquet
+    depends_on:
+      kafka:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    ports:
+      - "4040:4040" # Spark UI (Streaming)
+    environment:
+      - PYTHONUNBUFFERED=1
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9093
+      - JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+      - SPARK_LOCAL_IP=127.0.0.1
+      - SPARK_DRIVER_MEMORY=4g
+    networks:
+      - bigdata-network
+    restart: unless-stopped
+
+  # 6. KAFKA CONSUMER (Batch: Kafka → Bronze → trigger Silver ETL)
+  kafka-consumer:
+    build: .
+    image: bigdata-project-full
+    command: python -m kafka.consumer
+    depends_on:
+      kafka:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    ports:
+      - "4041:4040" # Spark UI (different port)
+    environment:
+      - PYTHONUNBUFFERED=1
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9093
+      - JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+      - SPARK_LOCAL_IP=127.0.0.1
+      - SPARK_DRIVER_MEMORY=4g
+    networks:
+      - bigdata-network
+    restart: unless-stopped
+    profiles:
+      - batch # Only start when batch mode needed
+
+  # 7. SPARK JOB (Manual trigger for batch processing)
+  spark-job:
+    build: .
+    image: bigdata-project-full
     command: python pipeline.py --matchweeks 1 --skip-scrape
     volumes:
       - .:/app
+    ports:
+      - "4041:4040" # Spark UI (different port to avoid conflict)
     environment:
       - JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
       - SPARK_LOCAL_IP=127.0.0.1
-      - SPARK_DRIVER_MEMORY=4g # Tăng RAM cho Spark
+      - SPARK_DRIVER_MEMORY=4g
       - PYTHONUNBUFFERED=1
+    networks:
+      - bigdata-network
+    profiles:
+      - manual # This service won't start automatically
+
+networks:
+  bigdata-network:
+    driver: bridge

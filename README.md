@@ -4,18 +4,39 @@ Pipeline xử lý dữ liệu bóng đá Premier League với kiến trúc Medal
 
 ## 🏗️ Kiến trúc
 
-### 3 Layers
+### Dual-Mode Architecture ⚡ NEW!
 
+Hệ thống hỗ trợ **2 luồng xử lý độc lập**:
+
+#### **Luồng 1: STREAMING** (Real-time) ⚡
 ```
-Bronze (JSON)  →  Silver (CSV Tables)  →  Gold (Cleaned)
-  Raw Data         3 types of tables      [Future]
+Scraper → Kafka → Spark Streaming → Silver (S3)
+                   ↓
+              Real-time processing
+              NO Bronze layer
+              Lowest latency
 ```
 
-### Bronze Layer
+#### **Luồng 2: BATCH** (Historical) 📦
+```
+Scraper → Kafka → Consumer → Bronze (S3) → Spark ETL → Silver (S3)
+                               ↓
+                         Raw data archive
+                         Audit trail
+```
+
+**Choose based on needs:**
+- 🚀 Need real-time? → Streaming
+- 📚 Need history? → Batch  
+- 🎯 Need both? → Run both!
+
+### Medallion Architecture (3 Layers)
+
+### Bronze Layer (Batch mode only)
 - **Format**: JSON
-- **Content**: Dữ liệu thô từ scraper
+- **Content**: Dữ liệu thô từ scraper (archive)
 - **Path**: `s3://bucket/premier-league/bronze/{season}/{matchweek}/`
-- **Ví dụ**: `bronze/2011-12/01/match_360486.json`
+- **Ví dụ**: `bronze/2025-26/01/match_2561896.json`
 
 ### Silver Layer
 - **Format**: CSV
@@ -64,9 +85,56 @@ AWS_ACCESS_KEY_ID=your_key
 AWS_SECRET_ACCESS_KEY=your_secret
 AWS_S3_BUCKET=your_bucket
 AWS_REGION=us-east-1
+
+# Kafka (optional, for Kafka mode)
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+USE_KAFKA=true
 ```
 
-### Chạy Pipeline
+## 🔥 Quick Start with Kafka
+
+### Option 1: Using Start Script (Recommended)
+
+**Windows:**
+```powershell
+# Start Kafka infrastructure
+.\start_kafka.ps1
+
+# Run scraper with Kafka
+python scrape_to_s3.py --matchweek 1 --use-kafka
+```
+
+**Linux/Mac:**
+```bash
+# Start Kafka infrastructure
+bash start_kafka.sh
+
+# Run scraper with Kafka
+python scrape_to_s3.py --matchweek 1 --use-kafka
+```
+
+### Option 2: Manual Setup
+
+```bash
+# 1. Start Kafka infrastructure
+docker-compose up -d zookeeper kafka kafka-ui kafka-consumer
+
+# 2. Create Kafka topics
+python -m kafka.topic_manager create
+
+# 3. Run scraper (sends data to Kafka)
+python scrape_to_s3.py --matchweek 1 2 3 --workers 3 --use-kafka
+
+# 4. Monitor Kafka UI
+# Open http://localhost:8080
+
+# 5. Check consumer logs
+docker-compose logs -f kafka-consumer
+```
+
+📚 **See [KAFKA_GUIDE.md](KAFKA_GUIDE.md) for detailed Kafka documentation**
+
+## 📋 Traditional Pipeline (Without Kafka)
 
 **1. Xử lý tất cả các mùa (auto discover):**
 ```bash
@@ -148,11 +216,20 @@ cat logs/pipeline_*.log
 │   ├── etl.py           # ETL Pipeline: Bronze -> Silver
 │   ├── processor.py     # S3 Data Store
 │   └── db.py            # Database utilities
+├── kafka/
+│   ├── config.py        # Kafka configuration
+│   ├── producer.py      # Kafka producer
+│   ├── consumer.py      # Kafka consumer
+│   └── topic_manager.py # Topic management utility
 ├── scraper/             # Web scrapers
 │   ├── season_scraper.py
 │   └── match_scraper.py
 ├── pipeline.py          # Main pipeline script
-├── scrape_to_s3.py      # Standalone scraper
+├── scrape_to_s3.py      # Standalone scraper (Kafka-enabled)
+├── docker-compose.yml   # Docker services (Kafka, Zookeeper, etc.)
+├── start_kafka.ps1      # Windows quick start
+├── start_kafka.sh       # Linux/Mac quick start
+├── KAFKA_GUIDE.md       # Kafka documentation
 └── README.md
 ```
 
