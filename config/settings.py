@@ -36,3 +36,9 @@ S3_CONFIG = {
     "region_name": os.getenv("AWS_REGION", "ap-southeast-1"),
     "prefix": os.getenv("AWS_S3_PREFIX", "premier_league"),
 }
+
+# Kafka
+KAFKA_CONFIG = {
+    "bootstrap_servers": os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
+    "topic_raw": os.getenv("KAFKA_TOPIC_RAW", "premier_league_raw"),
+}

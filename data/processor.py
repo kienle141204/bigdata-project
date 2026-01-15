@@ -206,3 +206,68 @@ class S3DataStore:
         except Exception as e:
             logger.error(f"List aggregates failed: {e}")
             return []
+
+    def exists(self, key: str) -> bool:
+        """Check if a file exists on S3."""
+        from botocore.exceptions import ClientError
+        try:
+            self.s3_client.head_object(Bucket=self.bucket_name, Key=key)
+            return True
+        except ClientError as e:
+            if e.response['Error']['Code'] == "404":
+                return False
+            logger.error(f"Error checking existence for {key}: {e}")
+            return False
+
+class S3StatusTracker:
+    """Tracks match scraping status using JSON files on S3 instead of local DB."""
+    
+    def __init__(self, flow_name: str = "batch"):
+        from config.settings import S3_CONFIG
+        self.store = S3DataStore()
+        self.flow_name = flow_name
+        self.prefix = S3_CONFIG.get("prefix", "premier_league")
+        self.status_key = f"{self.prefix}/metadata/{flow_name}_status.json"
+        self._status_cache = None
+
+    def _load_status(self) -> dict:
+        if self._status_cache is not None:
+            return self._status_cache
+        
+        data = self.store.read_json(self.status_key)
+        self._status_cache = data if data else {}
+        return self._status_cache
+
+    def _save_status(self, status_data: dict):
+        self.store.upload_json(status_data, s3_key=self.status_key)
+        self._status_cache = status_data
+
+    def get_match_state(self, match_id: int, season: str) -> dict:
+        """
+        Get the 3 fields state for a match.
+        Returns: { "is_played": bool, "is_scraped": bool }
+        """
+        status_data = self._load_status()
+        match_id_str = str(match_id)
+        
+        state = status_data.get(match_id_str, {
+            "is_played": False, 
+            "is_scraped": False
+        })
+        
+        # SPECIAL LOGIC: 2025/26 defaults to is_scraped=False to allow re-scraping
+        if season == "2025/26":
+            state["is_scraped"] = False
+            
+        return state
+
+    def update_match_status(self, match_id: int, is_played: bool, is_scraped: bool):
+        """Update match status on S3 with played and scraped flags."""
+        status_data = self._load_status()
+        status_data[str(match_id)] = {
+            "is_played": is_played,
+            "is_scraped": is_scraped,
+            "last_updated": datetime.now().isoformat()
+        }
+        self._save_status(status_data)
+        logger.debug(f"Updated {self.flow_name}: Match {match_id} | Played: {is_played} | Scraped: {is_scraped}")

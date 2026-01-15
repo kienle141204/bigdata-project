@@ -3,26 +3,111 @@ services:
   scraper:
     build: .
     image: bigdata-project-full
-    # Lệnh mặc định: Cào vòng 1 với 5 luồng. 
-    # Bạn có thể ghi đè lệnh này khi chạy: docker-compose run scraper python scrape_to_s3.py ...
     command: python scrape_to_s3.py --matchweek 1 --workers 5
     volumes:
       - .:/app
     environment:
-      - PYTHONUNBUFFERED=1 # Để log hiện ngay lập tức
-    # Tăng RAM cho Chrome
-    shm_size: '2gb'
+      - PYTHONUNBUFFERED=1
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+    shm_size: "2gb"
+    networks:
+      - pl-network
 
-  # 2. SERVICE XỬ LÝ DỮ LIỆU (SPARK ETL)
+  # 2. SERVICE XỬ LÝ DỮ LIỆU BATCH (SPARK ETL)
   spark-job:
-    build: . # Dùng chung Dockerfile với scraper cho tiện (đỡ phải build 2 lần)
+    build: .
     image: bigdata-project-full
-    # Lệnh mặc định: Chạy pipeline xử lý vòng 1
     command: python pipeline.py --matchweeks 1 --skip-scrape
     volumes:
       - .:/app
     environment:
       - JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
       - SPARK_LOCAL_IP=127.0.0.1
-      - SPARK_DRIVER_MEMORY=4g # Tăng RAM cho Spark
+      - SPARK_DRIVER_MEMORY=4g
       - PYTHONUNBUFFERED=1
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+    depends_on:
+      - kafka
+    networks:
+      - pl-network
+
+  # 3. ZOOKEEPER
+  zookeeper:
+    image: public.ecr.aws/bitnami/zookeeper:3.9
+    restart: always
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+    ports:
+      - "2181:2181"
+    networks:
+      - pl-network
+
+  # 4. KAFKA BROKER (FIXED)
+  kafka:
+    image: public.ecr.aws/bitnami/kafka:3.7
+    restart: always
+    ports:
+      - "29092:29092"
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+
+      # Zookeeper
+      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
+
+      # 🔥 FIX LISTENERS (QUAN TRỌNG)
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:29092
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:29092
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT
+      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+
+      # Kafka tuning
+      - KAFKA_CFG_MESSAGE_MAX_BYTES=10485760
+      - KAFKA_CFG_REPLICA_FETCH_MAX_BYTES=10485760
+      - KAFKA_CFG_SOCKET_REQUEST_MAX_BYTES=10485760
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+    depends_on:
+      - zookeeper
+    networks:
+      - pl-network
+
+  # 5. KAFKA UI
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      - KAFKA_CLUSTERS_0_NAME=local
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:29092
+      - KAFKA_CLUSTERS_0_ZOOKEEPER=zookeeper:2181
+    depends_on:
+      - kafka
+    networks:
+      - pl-network
+
+  # 6. SPARK STRUCTURED STREAMING (KAFKA → SILVER)
+  spark-streaming:
+    build: .
+    image: bigdata-project-full
+    command: python kafka/spark_consumer.py
+    restart: always
+    volumes:
+      - .:/app
+    environment:
+      - JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - PYTHONUNBUFFERED=1
+      - SPARK_DRIVER_MEMORY=2g
+      - SPARK_EXECUTOR_MEMORY=1g
+    mem_limit: 2g
+    mem_reservation: 1g
+    ports:
+      - "4040:4040"
+    depends_on:
+      - kafka
+    networks:
+      - pl-network
+
+networks:
+  pl-network:
+    driver: bridge

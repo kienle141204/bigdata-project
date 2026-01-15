@@ -93,11 +93,16 @@ class SeasonScraper:
             self._setup_driver()
     
     def stop(self) -> None:
-        """Stop the WebDriver session."""
+        """Stop the WebDriver session safely."""
         if self.driver:
-            self.driver.quit()
-            self.driver = None
-            logger.info("WebDriver session closed")
+            try:
+                self.driver.quit()
+                logger.info("WebDriver session closed successfully")
+            except Exception as e:
+                logger.warning(f"Error while closing WebDriver: {e}")
+            finally:
+                self.driver = None
+                self.wait = None
     
     def _handle_cookie_consent(self) -> None:
         """Handle cookie consent popup."""
@@ -174,11 +179,37 @@ class SeasonScraper:
             
             # Click on All Filters to access all filter options
             try:
-                all_filters_btn = self.driver.find_element(
-                    By.CSS_SELECTOR, 'button[aria-label="All Filters"]'
-                )
-                self.driver.execute_script("arguments[0].click();", all_filters_btn)
-                time.sleep(1)
+                # Try multiple possible selectors for the filters button
+                filter_selectors = [
+                    'button[aria-label="All Filters"]',
+                    '.filters-button',
+                    'button.filters-open'
+                ]
+                
+                all_filters_btn = None
+                for sel in filter_selectors:
+                    try:
+                        all_filters_btn = self.driver.find_element(By.CSS_SELECTOR, sel)
+                        if all_filters_btn.is_displayed():
+                            break
+                    except:
+                        continue
+                
+                if not all_filters_btn:
+                    # Alternative: Look for any button that contains "Filter"
+                    buttons = self.driver.find_elements(By.TAG_NAME, "button")
+                    for btn in buttons:
+                        if "filter" in btn.text.lower():
+                            all_filters_btn = btn
+                            break
+                
+                if all_filters_btn:
+                    self.driver.execute_script("arguments[0].scrollIntoView(true);", all_filters_btn)
+                    time.sleep(0.5)
+                    all_filters_btn.click()
+                    time.sleep(1)
+                else:
+                    logger.warning("Could not find filters button")
                 
                 # First, select the correct season
                 season_id = season_config["season_id"]
@@ -316,18 +347,27 @@ class SeasonScraper:
             
             matches = self.driver.execute_script(extract_script)
             
-            # Add matchweek info to each match
-            for match in matches:
-                match["matchweek"] = matchweek
-                match["season"] = season
+            logger.info(f"Found {len(matches)} matches on page. Validating IDs for {season}...")
             
-            # Filter to only 10 matches max per matchweek
-            matches.sort(key=lambda x: x['match_id'])
-            if len(matches) > 10:
-                matches = matches[:10]
+            # Validation: Check if IDs match the season range
+            season_range = self.SEASONS.get(season, {})
+            start_id = season_range.get("start_match_id", 0)
             
-            logger.info(f"Found {len(matches)} matches in Matchweek {matchweek}")
-            return matches
+            # If matches found don't seem to belong to the requested season, return empty
+            # (Matches for a season are usually within a range, e.g. MW1 to MW38 is +370 IDs)
+            valid_matches = []
+            for m in matches:
+                # Basic heuristic: 2011/12 IDs start with 360xxx. 2025/26 IDs start with 256xxxx.
+                # If they are too far apart, the filter failed.
+                if abs(m['match_id'] - start_id) < 5000: # Broad range for safety
+                    valid_matches.append(m)
+            
+            if len(valid_matches) < 5 and len(matches) > 0:
+                logger.warning(f"Extracted matches don't appear to belong to {season}. Outputting empty list for fallback.")
+                return []
+
+            logger.info(f"Accepted {len(valid_matches)} matches for {season} MW{matchweek}")
+            return valid_matches
             
         except Exception as e:
             logger.error(f"Error fetching matchweek {matchweek}: {e}")

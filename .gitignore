@@ -40,3 +40,7 @@ data/scraped/
 output/
 
 *.json
+
+checkpoint_streaming
+checkpoint_iceberg
+checkpoint_iceberg_s3
