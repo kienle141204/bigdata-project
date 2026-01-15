@@ -86,7 +86,7 @@ def process_batch_iceberg(df, batch_id):
 
     spark = df.sparkSession
 
-    # Helper function to write to Iceberg
+    # Helper function to write to Iceberg with schema matching
     def write_to_iceberg(data_list, table_name, partition_col=None):
         if not data_list: return
         json_rdd = spark.sparkContext.parallelize([json.dumps(r) for r in data_list])
@@ -100,7 +100,32 @@ def process_batch_iceberg(df, batch_id):
                     writer = writer.partitionedBy(partition_col)
                 writer.create()
             else:
-                batch_df.writeTo(table_name).append()
+                # Get existing table schema columns
+                existing_df = spark.table(table_name)
+                existing_cols = set(existing_df.columns)
+                incoming_cols = set(batch_df.columns)
+                
+                # Find extra columns in incoming data
+                extra_cols = incoming_cols - existing_cols
+                if extra_cols:
+                    logger.warning(f"Dropping extra columns not in {table_name} schema: {extra_cols}")
+                    batch_df = batch_df.drop(*extra_cols)
+                
+                # Find missing columns in incoming data (add as null)
+                missing_cols = existing_cols - incoming_cols
+                if missing_cols:
+                    from pyspark.sql.functions import lit
+                    for col_name in missing_cols:
+                        batch_df = batch_df.withColumn(col_name, lit(None))
+                
+                # Reorder columns to match table schema
+                batch_df = batch_df.select(existing_df.columns)
+                
+                # Append to existing table
+                batch_df.write \
+                    .format("iceberg") \
+                    .mode("append") \
+                    .saveAsTable(table_name)
             logger.info(f"Updated {table_name}")
         except Exception as e:
             logger.error(f"Failed to write to {table_name}: {e}")
@@ -109,6 +134,66 @@ def process_batch_iceberg(df, batch_id):
     write_to_iceberg(flattened_matches, "iceberg_catalog.silver.matches", "season")
     write_to_iceberg(flattened_players, "iceberg_catalog.silver.players", "season")
     write_to_iceberg(flattened_events, "iceberg_catalog.silver.events", "season")
+    
+    # Auto-sync affected teams to Gold layer
+    sync_batch_to_gold(spark, flattened_matches, flattened_players, flattened_events)
+
+def sync_batch_to_gold(spark, matches_data, players_data, events_data):
+    """Sync affected teams from batch to Gold layer CSV files."""
+    from data.processor import S3DataStore
+    from pyspark.sql.functions import col
+    
+    if not matches_data:
+        return
+    
+    # Find affected teams in this batch
+    teams = set()
+    for m in matches_data:
+        if m.get("home_team"): teams.add(m["home_team"])
+        if m.get("away_team"): teams.add(m["away_team"])
+    
+    if not teams:
+        return
+    
+    logger.info(f"Syncing {len(teams)} teams to Gold layer...")
+    store = S3DataStore()
+    
+    for team in teams:
+        team_folder = team.replace(" ", "_").replace("/", "_")
+        
+        try:
+            # Read full data from Iceberg tables for this team
+            df_matches = spark.table("iceberg_catalog.silver.matches")
+            df_players = spark.table("iceberg_catalog.silver.players")
+            df_events = spark.table("iceberg_catalog.silver.events")
+            
+            # 1. Matches
+            team_matches = df_matches.filter(
+                (col("home_team") == team) | (col("away_team") == team)
+            ).orderBy("season", "matchweek")
+            
+            if team_matches.count() > 0:
+                pdf = team_matches.toPandas()
+                s3_key = f"{S3_CONFIG['prefix']}/gold_iceberg/{team_folder}/matches.csv"
+                store.upload_csv(pdf.to_dict('records'), layer="gold", s3_key=s3_key)
+            
+            # 2. Players
+            team_players = df_players.filter(col("team") == team).orderBy("season", "matchweek")
+            if team_players.count() > 0:
+                pdf = team_players.toPandas()
+                s3_key = f"{S3_CONFIG['prefix']}/gold_iceberg/{team_folder}/players.csv"
+                store.upload_csv(pdf.to_dict('records'), layer="gold", s3_key=s3_key)
+            
+            # 3. Events
+            team_events = df_events.filter(col("team") == team).orderBy("season", "matchweek")
+            if team_events.count() > 0:
+                pdf = team_events.toPandas()
+                s3_key = f"{S3_CONFIG['prefix']}/gold_iceberg/{team_folder}/events.csv"
+                store.upload_csv(pdf.to_dict('records'), layer="gold", s3_key=s3_key)
+                
+            logger.info(f"  ✓ Synced {team} to Gold layer")
+        except Exception as e:
+            logger.error(f"  ✗ Failed to sync {team}: {e}")
 
 def main():
     spark = get_spark_session()

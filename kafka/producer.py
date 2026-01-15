@@ -92,10 +92,18 @@ class ScraperKafkaProducer:
             return False
 
     def process_matchweek(self, matchweek: int, season: str, delay: float) -> int:
-        """Scrape all matches for a given matchweek and send to Kafka using 3-field logic."""
+        """Scrape all matches for a given matchweek and send to Kafka.
+        
+        Logic (giống batch):
+        - Không có score (home_score/away_score) --> chưa đấu --> skip
+        - Vòng < CURRENT_MATCHWEEK và đã scraped --> skip (vòng đã xong)
+        - Vòng >= CURRENT_MATCHWEEK --> kiểm tra lại mỗi lần
+        """
         count = 0
         
-        logger.info(f"MW{matchweek}: Syncing match statuses for {season} (Streaming Flow)...")
+        current_mw = self.tracker.CURRENT_MATCHWEEK
+        logger.info(f"MW{matchweek}: Syncing for {season} (Current MW: {current_mw}, Streaming Flow)")
+        
         matches_summary = self.scraper.get_matchweek_matches(matchweek, season)
         
         if not matches_summary:
@@ -106,39 +114,38 @@ class ScraperKafkaProducer:
         for i, match in enumerate(matches_summary):
             match_id = match.get("match_id")
             
-            # Field 2: is_played (based on scores from web)
-            is_played_on_web = False
+            # Xác định có score trên web không
+            has_score_on_web = False
             if match.get("is_fallback"):
-                is_played_on_web = True
+                has_score_on_web = True  # Fallback mode: phải vào detail để check
             else:
                 hs = match.get("home_score")
                 as_ = match.get("away_score")
                 if hs is not None and as_ is not None:
-                    is_played_on_web = True
+                    has_score_on_web = True
             
-            # Field 3: is_already_scraped (from S3 manifest, handles 25/26 logic)
-            state = self.tracker.get_match_state(match_id, season)
-            is_already_scraped = state.get("is_scraped", False)
-
-            # --- DECISION LOGIC ---
-            if not is_played_on_web:
-                logger.info(f"MW{matchweek} | Match {match_id}: Skipping (Not played yet)")
-                continue
-
-            if is_already_scraped:
-                logger.info(f"MW{matchweek} | Match {match_id}: Skipping (Already recorded in Streaming manifest)")
+            # Sử dụng decision logic thông minh (giống batch)
+            should_scrape, reason = self.tracker.should_scrape(
+                match_id=match_id,
+                season=season,
+                matchweek=matchweek,
+                has_score_on_web=has_score_on_web
+            )
+            
+            if not should_scrape:
+                logger.info(f"MW{matchweek} | Match {match_id}: Skip - {reason}")
                 continue
             
             # --- ACTION: SCRAPE & SEND ---
             try:
-                logger.info(f"MW{matchweek} | Match {match_id}: Scrape/Send Required -> Processing...")
+                logger.info(f"MW{matchweek} | Match {match_id}: Scraping - {reason}")
                 match_data = self.scraper.scrape_match_with_matchweek(match_id, matchweek, season)
                 
                 if match_data:
                     # Double check if played in detail page
                     info = match_data.get("match_info", {})
                     if info.get("home_score") is None or info.get("away_score") is None:
-                        logger.info(f"MW{matchweek} | Match {match_id}: Is SCHEDULED. Skipping.")
+                        logger.info(f"MW{matchweek} | Match {match_id}: Is SCHEDULED. Skip.")
                         continue
 
                     match_data["ingestion_timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ")
