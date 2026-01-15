@@ -19,6 +19,8 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__CORE__DEFAULT_TIMEZONE: 'Asia/Ho_Chi_Minh'
     AIRFLOW__WEBSERVER__DEFAULT_UI_TIMEZONE: 'Asia/Ho_Chi_Minh'
+    # Chỉ định đường dẫn DAGs folder
+    AIRFLOW__CORE__DAGS_FOLDER: '/opt/airflow/dags'
 
     # AWS S3 Configuration (from .env)
     AWS_S3_BUCKET: ${AWS_S3_BUCKET}
