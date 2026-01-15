@@ -1,11 +1,9 @@
-# Apache Airflow Docker Compose Configuration
-# Sử dụng image kienle1412/bigdata:latest đã có sẵn
+# Apache Airflow 3.x Docker Compose
+# Airflow 3 uses: api-server, dag-processor, scheduler, triggerer
 #
-# Ports:
-#   - 8081: Airflow Web UI
+# Port: 8081 -> Airflow UI
 #
-# Sử dụng:
-#   docker compose -f docker-compose.airflow.yml up -d
+# Usage: docker compose -f docker-compose.airflow.yml up -d
 
 version: '3.8'
 
@@ -37,8 +35,6 @@ x-airflow-common: &airflow-common
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs
     - ./plugins:/opt/airflow/plugins
-  # Chạy với root để tránh permission issues
-  # user: "${AIRFLOW_UID:-50000}:0"
   depends_on: &airflow-common-depends-on
     postgres:
       condition: service_healthy
@@ -64,32 +60,18 @@ services:
     networks:
       - airflow-network
 
-  # Airflow Webserver (UI)
-  airflow-webserver:
+  # Airflow Standalone (All-in-one: API Server + Scheduler + Triggerer)
+  airflow:
     <<: *airflow-common
-    container_name: airflow-webserver
-    command: bash -c "pip install apache-airflow[postgres] psycopg2-binary && airflow webserver"
+    container_name: airflow
+    command: bash -c "pip install apache-airflow[postgres] psycopg2-binary && airflow standalone"
     ports:
       - "8081:8080"
-    healthcheck:
-      test: [ "CMD", "curl", "--fail", "http://localhost:8080/health" ]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-    restart: unless-stopped
-    depends_on:
-      <<: *airflow-common-depends-on
-      airflow-init:
-        condition: service_completed_successfully
-
-  # Airflow Scheduler
-  airflow-scheduler:
-    <<: *airflow-common
-    container_name: airflow-scheduler
-    command: bash -c "pip install apache-airflow[postgres] psycopg2-binary && airflow scheduler"
     shm_size: "2gb"
     restart: unless-stopped
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
     depends_on:
       <<: *airflow-common-depends-on
       airflow-init:
@@ -104,21 +86,8 @@ services:
       - -c
       - |
         pip install apache-airflow[postgres] psycopg2-binary
-
-        # Initialize database
-        airflow db init
-
-        # Create admin user
-        airflow users create \
-          --username admin \
-          --firstname Admin \
-          --lastname User \
-          --role Admin \
-          --email admin@localhost \
-          --password admin || true
-
-        echo "✅ Airflow initialized successfully!"
-    user: "0:0"
+        airflow db migrate
+        echo "✅ Airflow DB initialized!"
     depends_on:
       postgres:
         condition: service_healthy
