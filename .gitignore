@@ -46,6 +46,6 @@ checkpoint_iceberg
 checkpoint_iceberg_s3
 
 # Airflow
-airflow/logs/*
-!airflow/logs/.gitkeep
-airflow/.env
+# airflow/logs/*
+# !airflow/logs/.gitkeep
+# airflow/.env
