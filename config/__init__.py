@@ -4,6 +4,7 @@ from .settings import (
     CSS_SELECTORS,
     STATS_CATEGORIES,
     S3_CONFIG,
+    MYSQL_CONFIG,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "CSS_SELECTORS",
     "STATS_CATEGORIES",
     "S3_CONFIG",
+    "MYSQL_CONFIG",
 ]

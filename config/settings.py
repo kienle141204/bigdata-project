@@ -42,3 +42,13 @@ KAFKA_CONFIG = {
     "bootstrap_servers": os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
     "topic_raw": os.getenv("KAFKA_TOPIC_RAW", "premier_league_raw"),
 }
+# MySQL Database
+MYSQL_CONFIG = {
+    "host": os.getenv("MYSQL_HOST", "mysql-6d9700d-quydang16012004-e907.f.aivencloud.com"),
+    "port": int(os.getenv("MYSQL_PORT", "28225")),
+    "user": os.getenv("MYSQL_USER", "avnadmin"),
+    "password": os.getenv("MYSQL_PASSWORD", ""),
+    "database": os.getenv("MYSQL_DATABASE", "defaultdb"),
+    "ssl_mode": os.getenv("MYSQL_SSL_MODE", "REQUIRED"),
+    "ssl_ca": os.getenv("MYSQL_SSL_CA", ""),
+}

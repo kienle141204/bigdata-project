@@ -17,3 +17,8 @@ boto3>=1.34.14
 
 # Kafka Streaming
 kafka-python>=2.0.2
+
+# MySQL database connectors
+mysql-connector-python>=8.2.0
+pymysql>=1.1.0
+sqlalchemy>=2.0.23
