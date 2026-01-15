@@ -1,28 +1,26 @@
 # Apache Airflow Docker Compose Configuration
-# Triển khai Airflow cho batch pipeline Premier League
+# Sử dụng image kienle1412/bigdata:latest đã có sẵn
 #
 # Ports:
 #   - 8081: Airflow Web UI
 #
 # Sử dụng:
-#   docker-compose -f docker-compose.airflow.yml up -d
+#   docker compose -f docker-compose.airflow.yml up -d
 
 version: '3.8'
 
 x-airflow-common: &airflow-common
-  build:
-    context: ..
-    dockerfile: airflow/Dockerfile.airflow
-  image: bigdata-airflow:latest
-  environment: &airflow-common-env
+  image: kienle1412/bigdata:latest
+  environment:
+    # Airflow Core
+    &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
-    AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
     AIRFLOW__CORE__FERNET_KEY: ''
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'false'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__CORE__DEFAULT_TIMEZONE: 'Asia/Ho_Chi_Minh'
     AIRFLOW__WEBSERVER__DEFAULT_UI_TIMEZONE: 'Asia/Ho_Chi_Minh'
-    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
 
     # AWS S3 Configuration (from .env)
     AWS_S3_BUCKET: ${AWS_S3_BUCKET}
@@ -39,11 +37,12 @@ x-airflow-common: &airflow-common
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs
     - ./plugins:/opt/airflow/plugins
-    - ..:/app # Mount project code
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on: &airflow-common-depends-on
     postgres:
       condition: service_healthy
+  networks:
+    - airflow-network
 
 services:
   # PostgreSQL Database for Airflow
@@ -68,64 +67,32 @@ services:
   airflow-webserver:
     <<: *airflow-common
     container_name: airflow-webserver
-    command: webserver
+    command: bash -c "pip install apache-airflow[postgres] psycopg2-binary && airflow webserver"
     ports:
       - "8081:8080"
     healthcheck:
       test: [ "CMD", "curl", "--fail", "http://localhost:8080/health" ]
-      interval: 10s
+      interval: 30s
       timeout: 10s
       retries: 5
+      start_period: 60s
     restart: unless-stopped
     depends_on:
       <<: *airflow-common-depends-on
       airflow-init:
         condition: service_completed_successfully
-    networks:
-      - airflow-network
 
   # Airflow Scheduler
   airflow-scheduler:
     <<: *airflow-common
     container_name: airflow-scheduler
-    command: scheduler
-    healthcheck:
-      test: [ "CMD-SHELL", 'airflow jobs check --job-type SchedulerJob --hostname "$${HOSTNAME}"' ]
-      interval: 10s
-      timeout: 10s
-      retries: 5
-    restart: unless-stopped
-    shm_size: "2gb" # Required for Chrome/Selenium
-    depends_on:
-      <<: *airflow-common-depends-on
-      airflow-init:
-        condition: service_completed_successfully
-    networks:
-      - airflow-network
-
-  # Airflow Worker (for running tasks)
-  airflow-worker:
-    <<: *airflow-common
-    container_name: airflow-worker
-    command: celery worker
-    shm_size: "2gb" # Required for Chrome/Selenium
-    healthcheck:
-      test:
-        - "CMD-SHELL"
-        - 'celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"'
-      interval: 10s
-      timeout: 10s
-      retries: 5
-    environment:
-      <<: *airflow-common-env
-      DUMB_INIT_SETSID: "0"
+    command: bash -c "pip install apache-airflow[postgres] psycopg2-binary && airflow scheduler"
+    shm_size: "2gb"
     restart: unless-stopped
     depends_on:
       <<: *airflow-common-depends-on
       airflow-init:
         condition: service_completed_successfully
-    networks:
-      - airflow-network
 
   # Airflow Init (database initialization)
   airflow-init:
@@ -135,9 +102,7 @@ services:
     command:
       - -c
       - |
-        # Create required directories
-        mkdir -p /sources/logs /sources/dags /sources/plugins
-        chown -R "${AIRFLOW_UID:-50000}:0" /sources/{logs,dags,plugins}
+        pip install apache-airflow[postgres] psycopg2-binary
 
         # Initialize database
         airflow db init
@@ -149,35 +114,13 @@ services:
           --lastname User \
           --role Admin \
           --email admin@localhost \
-          --password admin
+          --password admin || true
 
-        echo "Airflow initialized successfully!"
-    environment:
-      <<: *airflow-common-env
-      _AIRFLOW_DB_UPGRADE: 'true'
-      _AIRFLOW_WWW_USER_CREATE: 'true'
-      _AIRFLOW_WWW_USER_USERNAME: admin
-      _AIRFLOW_WWW_USER_PASSWORD: admin
+        echo "✅ Airflow initialized successfully!"
     user: "0:0"
-    volumes:
-      - .:/sources
-    networks:
-      - airflow-network
-
-  # Airflow CLI (for manual commands)
-  airflow-cli:
-    <<: *airflow-common
-    profiles:
-      - debug
-    environment:
-      <<: *airflow-common-env
-      CONNECTION_CHECK_MAX_COUNT: "0"
-    command:
-      - bash
-      - -c
-      - airflow
-    networks:
-      - airflow-network
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 networks:
   airflow-network:
