@@ -237,9 +237,12 @@ python scrape_to_s3.py --matchweek 1 --season "2011/12"
 
 | Deployment | Guide | Port | Description |
 |------------|-------|------|-------------|
+| ☸️ **Kubernetes** | [k8s/DEPLOY_K8S.md](./k8s/DEPLOY_K8S.md) | 8080, 8081 | Production-ready K8s deployment với auto-scaling |
 | 📦 **Batch (Airflow)** | [DEPLOY_AIRFLOW.md](./DEPLOY_AIRFLOW.md) | 8081 | Daily scheduled scraping with Airflow UI |
 | 🌊 **Streaming** | [DEPLOY_STREAMING.md](./DEPLOY_STREAMING.md) | 8080, 4040 | Real-time Kafka + Spark Streaming |
 | ⚡ **Batch (Docker)** | [DEPLOY_BATCH.md](./DEPLOY_BATCH.md) | - | Simple Docker-based batch processing |
+
+**💡 Không chắc có cần Kubernetes?** Xem [k8s/K8S_VS_DOCKER_COMPOSE.md](./k8s/K8S_VS_DOCKER_COMPOSE.md) để hiểu khi nào cần K8s và khi nào không!
 
 ### Airflow (Khuyến nghị cho Production)
 

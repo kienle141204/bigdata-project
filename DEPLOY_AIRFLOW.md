@@ -15,8 +15,9 @@ Luồng batch này bao gồm:
 ```
 airflow/
 ├── dags/
-│   ├── batch_scrape_dag.py      # DAG scraping hàng ngày
-│   └── backfill_dag.py          # DAG backfill dữ liệu cũ
+│   ├── batch_scrape_dag.py           # DAG scraping hàng ngày
+│   ├── backfill_dag.py                # DAG backfill dữ liệu cũ
+│   └── spark_mysql_transformation_dag.py  # DAG transform Gold (S3) -> MySQL
 ├── docker-compose.airflow.yml   # Docker Compose cho Airflow
 ├── Dockerfile.airflow           # Docker image với Chrome + Spark
 ├── plugins/                     # Custom plugins (nếu cần)
@@ -32,7 +33,7 @@ airflow/
 git clone https://github.com/your-repo/bigdata-project.git
 cd bigdata-project
 
-# Tạo file .env với AWS credentials
+# Tạo file .env với AWS credentials và MySQL config
 cat > .env << 'EOF'
 # AWS S3 Configuration
 AWS_S3_BUCKET=your-bucket-name
@@ -44,6 +45,14 @@ AWS_S3_PREFIX=premier_league
 # Selenium
 HEADLESS=true
 REQUEST_DELAY=2
+
+# MySQL Database Configuration (cho Spark MySQL Transformation)
+MYSQL_HOST=your-mysql-host
+MYSQL_PORT=3306
+MYSQL_USER=your-mysql-user
+MYSQL_PASSWORD=your-mysql-password
+MYSQL_DATABASE=your-database-name
+MYSQL_SSL_MODE=REQUIRED
 EOF
 ```
 
@@ -261,6 +270,107 @@ default_args = {
 1. Click vào DAG → Click vào ngày chạy
 2. Click vào task cụ thể
 3. Click "Log" để xem output
+
+## 🔄 Spark MySQL Transformation DAG
+
+DAG `spark_mysql_transformation` tự động transform dữ liệu từ Gold layer (S3) sang MySQL database.
+
+### Mô tả
+
+- **Schedule**: Chạy lúc 7:00 AM mỗi ngày (sau `batch_scrape_dag` 1 giờ)
+- **Mục đích**: Load dữ liệu từ S3 Gold CSV files vào MySQL tables
+- **Tables**: `tran_dau`, `doi_bong`, `cau_thu`, `cau_thu_tran_dau`, `su_kien_tran_dau`
+
+### Cấu hình MySQL
+
+Đảm bảo các biến môi trường MySQL đã được set trong `.env`:
+
+```bash
+MYSQL_HOST=your-mysql-host
+MYSQL_PORT=3306
+MYSQL_USER=your-mysql-user
+MYSQL_PASSWORD=your-mysql-password
+MYSQL_DATABASE=your-database-name
+MYSQL_SSL_MODE=REQUIRED
+```
+
+### Chạy thủ công
+
+Trong Airflow UI:
+1. Tìm DAG `spark_mysql_transformation`
+2. Click "Trigger DAG with config"
+3. Nhập config JSON (tùy chọn):
+   ```json
+   {
+     "season": "2024/25"
+   }
+   ```
+   - Nếu không có `season`, sẽ xử lý tất cả seasons
+   - Nếu có `season`, chỉ xử lý season đó
+
+### Chạy từ command line
+
+```bash
+# Trigger DAG với season cụ thể
+sudo docker exec -it airflow-scheduler airflow dags trigger spark_mysql_transformation \
+  --conf '{"season": "2024/25"}'
+
+# Trigger DAG cho tất cả seasons
+sudo docker exec -it airflow-scheduler airflow dags trigger spark_mysql_transformation
+```
+
+### Test Spark Transformation (không qua Airflow)
+
+```bash
+# Chạy trực tiếp script
+cd /app
+python Spark/s3_to_mysql_transformer.py --season "2024/25"
+
+# Hoặc cho tất cả seasons
+python Spark/s3_to_mysql_transformer.py
+```
+
+### Workflow
+
+```
+batch_scrape_dag (6:00 AM)
+  └─> Scrape → Bronze → Silver → Gold (S3)
+  
+spark_mysql_transformation (7:00 AM)
+  └─> Read Gold (S3) → Spark Transform → MySQL
+```
+
+### Troubleshooting
+
+**Lỗi: MySQL connection failed**
+```bash
+# Kiểm tra MySQL credentials
+sudo docker exec -it airflow-scheduler env | grep MYSQL
+
+# Test MySQL connection từ container
+sudo docker exec -it airflow-scheduler python -c "
+from Spark.connectors.spark_mysql_connector import create_spark_session_with_mysql
+spark, jdbc_url, props = create_spark_session_with_mysql()
+print('✅ MySQL connection OK')
+spark.stop()
+"
+```
+
+**Lỗi: No data in Gold layer**
+```bash
+# Kiểm tra Gold files trên S3
+aws s3 ls s3://your-bucket/premier_league/gold/ --recursive
+
+# Đảm bảo batch_scrape_dag đã chạy thành công trước đó
+```
+
+**Lỗi: Spark out of memory**
+Tăng memory trong DAG:
+```python
+env={
+    'SPARK_DRIVER_MEMORY': '8g',  # Tăng từ 4g lên 8g
+}
+```
 
 ## 🔗 Quick Links
 

@@ -29,6 +29,18 @@ x-airflow-common: &airflow-common
     AWS_REGION: ${AWS_REGION:-ap-southeast-1}
     AWS_S3_PREFIX: ${AWS_S3_PREFIX:-premier_league}
 
+    # MySQL Configuration (from .env)
+    MYSQL_HOST: ${MYSQL_HOST}
+    MYSQL_PORT: ${MYSQL_PORT}
+    MYSQL_USER: ${MYSQL_USER}
+    MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    MYSQL_DATABASE: ${MYSQL_DATABASE}
+    MYSQL_SSL_MODE: ${MYSQL_SSL_MODE:-REQUIRED}
+
+    # Kafka Configuration (from .env)
+    KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:29092}
+    KAFKA_TOPIC_RAW: ${KAFKA_TOPIC_RAW:-premier_league_raw}
+
     # Selenium
     HEADLESS: 'true'
     REQUEST_DELAY: '2'
@@ -37,6 +49,19 @@ x-airflow-common: &airflow-common
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs
     - ./plugins:/opt/airflow/plugins
+    # Mount project code để DAGs có thể chạy Spark scripts và các Python modules
+    - ../Spark:/app/Spark
+    - ../data:/app/data
+    - ../config:/app/config
+    - ../scraper:/app/scraper
+    - ../scrape_to_s3.py:/app/scrape_to_s3.py
+    - ../pipeline.py:/app/pipeline.py
+    - ../requirements.txt:/app/requirements.txt
+    - ../kafka:/app/kafka
+    - ../scripts:/app/scripts
+    # Mount variables file để tự động import
+    - ./airflow-variables.json:/tmp/airflow-variables.json:ro
+    - ./auto-import-variables.py:/opt/airflow/auto-import-variables.py:ro
   depends_on: &airflow-common-depends-on
     postgres:
       condition: service_healthy
@@ -90,6 +115,10 @@ services:
         pip install apache-airflow[postgres] psycopg2-binary
         airflow db migrate
         echo "✅ Airflow DB initialized!"
+        # Import variables nếu có file (sẽ chạy lại khi Airflow ready)
+        if [ -f /tmp/airflow-variables.json ]; then
+          echo "📋 Variables file found, will import after Airflow is ready"
+        fi
     depends_on:
       postgres:
         condition: service_healthy

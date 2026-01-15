@@ -16,6 +16,12 @@ def create_spark_session_with_mysql(app_name: str = "MySQLSparkApp", master: str
     conf.set("spark.app.name", app_name)
     conf.set("spark.master", master)
     
+    # Set Python executable cho Spark (từ environment variable nếu có)
+    pyspark_python = os.getenv("PYSPARK_PYTHON")
+    if pyspark_python:
+        conf.set("spark.pyspark.python", pyspark_python)
+        conf.set("spark.pyspark.driver.python", pyspark_python)
+    
     mysql_host = MYSQL_CONFIG["host"]
     mysql_port = MYSQL_CONFIG["port"]
     mysql_user = MYSQL_CONFIG["user"]

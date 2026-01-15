@@ -203,10 +203,23 @@ Airflow cho phép lên lịch tự động và quản lý workflow tốt hơn.
 
 #### Bước 1: Khởi động Airflow
 
+**Trên Linux/Mac:**
 ```bash
 cd airflow
 chmod +x start-airflow.sh
 ./start-airflow.sh
+```
+
+**Trên Windows (PowerShell):**
+```powershell
+cd airflow
+.\start-airflow.ps1
+```
+
+**Hoặc chạy trực tiếp với Docker Compose:**
+```bash
+cd airflow
+docker-compose -f docker-compose.airflow.yml up -d --build
 ```
 
 #### Bước 2: Truy cập Airflow UI
@@ -224,9 +237,22 @@ chmod +x start-airflow.sh
 
 #### Bước 4: Dừng Airflow
 
+**Trên Linux/Mac:**
 ```bash
 cd airflow
 ./stop-airflow.sh
+```
+
+**Trên Windows (PowerShell):**
+```powershell
+cd airflow
+.\stop-airflow.ps1
+```
+
+**Hoặc chạy trực tiếp:**
+```bash
+cd airflow
+docker-compose -f docker-compose.airflow.yml down
 ```
 
 Chi tiết hơn xem: [DEPLOY_AIRFLOW.md](./DEPLOY_AIRFLOW.md)

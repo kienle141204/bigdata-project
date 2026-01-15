@@ -23,6 +23,12 @@ def create_spark_session(app_name: str = "S3SparkApp", master: str = "local[*]")
     conf.set("spark.app.name", app_name)
     conf.set("spark.master", master)
     
+    # Set Python executable cho Spark (từ environment variable nếu có)
+    pyspark_python = os.getenv("PYSPARK_PYTHON")
+    if pyspark_python:
+        conf.set("spark.pyspark.python", pyspark_python)
+        conf.set("spark.pyspark.driver.python", pyspark_python)
+    
     conf.set("spark.hadoop.fs.s3a.access.key", aws_access_key_id)
     conf.set("spark.hadoop.fs.s3a.secret.key", aws_secret_access_key)
     conf.set("spark.hadoop.fs.s3a.endpoint", f"s3.{aws_region}.amazonaws.com")

@@ -49,3 +49,5 @@ checkpoint_iceberg_s3
 # airflow/logs/*
 # !airflow/logs/.gitkeep
 # airflow/.env
+airflow/airflow-variables-exported.json
+airflow/airflow-variables-local.json
