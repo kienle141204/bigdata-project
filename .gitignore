@@ -44,3 +44,8 @@ output/
 checkpoint_streaming
 checkpoint_iceberg
 checkpoint_iceberg_s3
+
+# Airflow
+airflow/logs/*
+!airflow/logs/.gitkeep
+airflow/.env

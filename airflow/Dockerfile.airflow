@@ -1,0 +1,41 @@
+# Airflow Image with Chrome + Selenium + Spark support
+# For Premier League Batch Pipeline
+
+FROM apache/airflow:2.8.1-python3.10
+
+USER root
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget \
+    curl \
+    gnupg \
+    unzip \
+    openjdk-17-jdk-headless \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Chrome
+RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
+    && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list \
+    && apt-get update \
+    && apt-get install -y google-chrome-stable \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set JAVA_HOME
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
+USER airflow
+
+# Install Python dependencies
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Install additional Airflow providers
+RUN pip install --no-cache-dir \
+    apache-airflow-providers-amazon \
+    apache-airflow-providers-postgres \
+    apache-airflow-providers-celery
+
+# Set working directory for app code
+WORKDIR /app

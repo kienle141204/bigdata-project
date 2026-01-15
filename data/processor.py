@@ -220,7 +220,15 @@ class S3DataStore:
             return False
 
 class S3StatusTracker:
-    """Tracks match scraping status using JSON files on S3 instead of local DB."""
+    """Tracks match scraping status using JSON files on S3 instead of local DB.
+    
+    Logic thông minh cho việc re-scrape:
+    - Vòng < CURRENT_MATCHWEEK: Nếu đã scraped --> bỏ qua hoàn toàn
+    - Vòng >= CURRENT_MATCHWEEK: Kiểm tra lại score mỗi lần (để cập nhật trận mới đấu)
+    """
+    
+    # Vòng đấu hiện tại của mùa 2025/26 - CẬP NHẬT KHI CẦN
+    CURRENT_MATCHWEEK = 20
     
     def __init__(self, flow_name: str = "batch"):
         from config.settings import S3_CONFIG
@@ -242,9 +250,14 @@ class S3StatusTracker:
         self.store.upload_json(status_data, s3_key=self.status_key)
         self._status_cache = status_data
 
-    def get_match_state(self, match_id: int, season: str) -> dict:
+    def get_match_state(self, match_id: int, season: str, matchweek: int = None) -> dict:
         """
-        Get the 3 fields state for a match.
+        Get the 3 fields state for a match with smart re-scrape logic.
+        
+        Logic:
+        - Vòng < CURRENT_MATCHWEEK (đã xong): Nếu scraped --> is_scraped = True (bỏ qua)
+        - Vòng >= CURRENT_MATCHWEEK (đang/sắp diễn ra): is_scraped = False (luôn check lại)
+        
         Returns: { "is_played": bool, "is_scraped": bool }
         """
         status_data = self._load_status()
@@ -255,11 +268,59 @@ class S3StatusTracker:
             "is_scraped": False
         })
         
-        # SPECIAL LOGIC: 2025/26 defaults to is_scraped=False to allow re-scraping
-        if season == "2025/26":
-            state["is_scraped"] = False
+        # SPECIAL LOGIC for current season 2025/26
+        if season == "2025/26" and matchweek is not None:
+            if matchweek >= self.CURRENT_MATCHWEEK:
+                # Vòng hiện tại hoặc tương lai: luôn check lại score
+                # Đặt is_scraped = False để buộc kiểm tra lại trên web
+                state["is_scraped"] = False
+            # Vòng đã qua (< CURRENT_MATCHWEEK): giữ nguyên is_scraped từ cache
+            # Nếu đã scraped trước đó --> vẫn là True --> sẽ skip
             
         return state
+    
+    def should_scrape(self, match_id: int, season: str, matchweek: int, 
+                      has_score_on_web: bool) -> tuple:
+        """
+        Quyết định có nên scrape match này không.
+        
+        Args:
+            match_id: ID của trận đấu
+            season: Mùa giải (vd: "2025/26")
+            matchweek: Vòng đấu (1-38)
+            has_score_on_web: Có score trên web không (home_score & away_score not None)
+        
+        Returns:
+            (should_scrape: bool, reason: str)
+        """
+        # Rule 1: Không có score --> chưa đấu --> không scrape
+        if not has_score_on_web:
+            return False, "Not played yet (no score)"
+        
+        # Rule 2: Mùa cũ (không phải 2025/26) --> check is_scraped
+        if season != "2025/26":
+            state = self.get_match_state(match_id, season, matchweek)
+            if state.get("is_scraped", False):
+                return False, "Already scraped (historical season)"
+            return True, "Historical match needs scraping"
+        
+        # Rule 3: Mùa 2025/26
+        state = self.get_match_state(match_id, season, matchweek)
+        
+        # Vòng cũ (< current): nếu đã scraped --> skip
+        if matchweek < self.CURRENT_MATCHWEEK:
+            if state.get("is_scraped", False):
+                return False, f"Already scraped (MW {matchweek} < current MW {self.CURRENT_MATCHWEEK})"
+            return True, f"Old matchweek {matchweek} needs scraping"
+        
+        # Vòng hiện tại/tương lai (>= current): kiểm tra đã scraped chưa trong cache
+        # Nhưng vì đây là vòng đang diễn ra, vẫn scrape nếu có score mới
+        if state.get("is_scraped", False):
+            # Đã scraped nhưng là vòng hiện tại --> vẫn có thể cần update
+            # Ở đây ta skip vì đã có data, nếu muốn force update thì bỏ dòng này
+            return False, f"Already scraped (current MW {matchweek})"
+        
+        return True, f"Current/future matchweek {matchweek} needs scraping"
 
     def update_match_status(self, match_id: int, is_played: bool, is_scraped: bool):
         """Update match status on S3 with played and scraped flags."""

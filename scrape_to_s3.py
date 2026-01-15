@@ -43,13 +43,20 @@ class SingleThreadScraper:
         self.scraper.stop()
 
     def process_matchweek(self, matchweek: int, season: str, delay: float, formats: List[str]) -> List[dict]:
-        """Scrape all matches for a given matchweek using 3-field decision logic."""
+        """Scrape all matches for a given matchweek using smart decision logic.
+        
+        Logic:
+        - Không có score (home_score/away_score) --> chưa đấu --> skip
+        - Vòng < CURRENT_MATCHWEEK và đã scraped --> skip (vòng đã xong)
+        - Vòng >= CURRENT_MATCHWEEK --> kiểm tra lại mỗi lần (cập nhật trận mới)
+        """
         results = []
         all_matches = []
         
-        logger.info(f"MW{matchweek}: Syncing match statuses for {season} (Batch Flow)...")
+        current_mw = self.tracker.CURRENT_MATCHWEEK
+        logger.info(f"MW{matchweek}: Syncing for {season} (Current MW: {current_mw}, Batch Flow)")
         
-        # 1. Check summary page to determine is_played (Field 2)
+        # 1. Check summary page to get match list and scores
         matches_summary = self.scraper.get_matchweek_matches(matchweek, season)
         
         if not matches_summary:
@@ -60,53 +67,53 @@ class SingleThreadScraper:
         for i, match in enumerate(matches_summary):
             match_id = match.get("match_id")
             
-            # Field 2: is_played (based on scores from web)
-            is_played_on_web = False
+            # Xác định có score trên web không
+            has_score_on_web = False
             if match.get("is_fallback"):
-                is_played_on_web = True # If fallback, we must visit to check
+                has_score_on_web = True  # Fallback mode: phải vào detail để check
             else:
                 hs = match.get("home_score")
                 as_ = match.get("away_score")
                 if hs is not None and as_ is not None:
-                    is_played_on_web = True
+                    has_score_on_web = True
             
-            # Field 3: is_scraped (based on S3 manifest + season 25/26 logic)
-            state = self.tracker.get_match_state(match_id, season)
-            is_already_scraped = state.get("is_scraped", False)
-
-            # --- DECISION LOGIC ---
-            if not is_played_on_web:
-                logger.info(f"MW{matchweek} | Match {match_id}: Skipping (Not played yet)")
-                continue
-
-            if is_already_scraped:
-                logger.info(f"MW{matchweek} | Match {match_id}: Skipping (Already scraped on S3)")
+            # Sử dụng decision logic thông minh
+            should_scrape, reason = self.tracker.should_scrape(
+                match_id=match_id,
+                season=season,
+                matchweek=matchweek,
+                has_score_on_web=has_score_on_web
+            )
+            
+            if not should_scrape:
+                logger.info(f"MW{matchweek} | Match {match_id}: Skip - {reason}")
                 continue
 
             # --- SCRAPE ACTION ---
             try:
-                logger.info(f"MW{matchweek} | Match {match_id}: Scrape Required -> Scraping detail...")
+                logger.info(f"MW{matchweek} | Match {match_id}: Scraping - {reason}")
                 match_data = self.scraper.scrape_match_with_matchweek(match_id, matchweek, season)
                 
                 if match_data:
-                    # Double check if played inside detail page if we were in fallback
+                    # Double check if played inside detail page
                     info = match_data.get("match_info", {})
-                    detail_is_played = info.get("home_score") is not None and info.get("away_score") is not None
+                    detail_has_score = info.get("home_score") is not None and info.get("away_score") is not None
                     
-                    if not detail_is_played:
-                        logger.info(f"MW{matchweek} | Match {match_id}: Detail confirms not played. Skipping.")
+                    if not detail_has_score:
+                        logger.info(f"MW{matchweek} | Match {match_id}: Detail confirms not played. Skip.")
                         continue
 
                     all_matches.append(match_data)
                     self.s3_store.upload_match(match_data, formats)
                     
-                    # Update 3-field state on S3
+                    # Update status on S3
                     self.tracker.update_match_status(match_id, is_played=True, is_scraped=True)
                     
                     results.append({
                         "match_id": match_id,
                         "home": info.get("home_team"),
-                        "away": info.get("away_team")
+                        "away": info.get("away_team"),
+                        "score": f"{info.get('home_score')}-{info.get('away_score')}"
                     })
             except Exception as e:
                 logger.error(f"MW{matchweek} | Error processing {match_id}: {e}")

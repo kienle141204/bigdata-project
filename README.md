@@ -4,12 +4,32 @@ Pipeline xử lý dữ liệu bóng đá Premier League với kiến trúc Medal
 
 ## 🏗️ Kiến trúc
 
+### Dual Pipeline Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    PREMIER LEAGUE DATA PIPELINE                      │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  📦 BATCH PIPELINE (Airflow)           🌊 STREAMING PIPELINE        │
+│  ┌─────────────────────────┐           ┌─────────────────────────┐  │
+│  │ Scraper → Bronze → S3  │           │ Producer → Kafka →      │  │
+│  │     ↓                   │           │     Spark Streaming →   │  │
+│  │ Silver (CSV Tables)     │           │     Iceberg Tables      │  │
+│  │     ↓                   │           │                         │  │
+│  │ Gold (Team-specific)    │           └─────────────────────────┘  │
+│  └─────────────────────────┘                                        │
+│                                                                      │
+│  ⏰ Schedule: Daily @ 6AM              ⚡ Real-time processing       │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
 ### 3 Layers
 
 ```
 Bronze (JSON)  →  Silver (CSV Tables)  →  Gold (Cleaned)
-  Raw Data         3 types of tables      [Future]
-```
+  Raw Data         3 types of tables      Team-specific
 
 ### Bronze Layer
 - **Format**: JSON
@@ -211,6 +231,25 @@ export AWS_SECRET_ACCESS_KEY=your_secret
 ```bash
 # Scrape data first
 python scrape_to_s3.py --matchweek 1 --season "2011/12"
+```
+
+## 🚀 Quick Start Deployment
+
+| Deployment | Guide | Port | Description |
+|------------|-------|------|-------------|
+| 📦 **Batch (Airflow)** | [DEPLOY_AIRFLOW.md](./DEPLOY_AIRFLOW.md) | 8081 | Daily scheduled scraping with Airflow UI |
+| 🌊 **Streaming** | [DEPLOY_STREAMING.md](./DEPLOY_STREAMING.md) | 8080, 4040 | Real-time Kafka + Spark Streaming |
+| ⚡ **Batch (Docker)** | [DEPLOY_BATCH.md](./DEPLOY_BATCH.md) | - | Simple Docker-based batch processing |
+
+### Airflow (Khuyến nghị cho Production)
+
+```bash
+cd airflow
+chmod +x start-airflow.sh
+./start-airflow.sh
+
+# Access UI: http://<EC2-IP>:8081
+# Login: admin / admin
 ```
 
 ## 📝 License
